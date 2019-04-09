@@ -367,7 +367,7 @@ func UpdateRegistry(ctx context.Context, state *pb.BeaconState) (*pb.BeaconState
 	return state, nil
 }
 
-// ProcessSlashings processes all slashings.
+// ProcessSlashings processes all slashings by applying penalties to slashed validators.
 // Spec pseudocode definition:
 // def process_slashings(state: BeaconState) -> None:
 //     """
@@ -410,9 +410,9 @@ func ProcessSlashings(ctx context.Context, state *pb.BeaconState) *pb.BeaconStat
 
 			var penalty uint64
 			index := uint64(idx)
-            effectiveBalance := helpers.EffectiveBalance(state, index)
-            minPenaltyQuotient := params.BeaconConfig().MinPenaltyQuotient
-            if totalPenalties*3 < totalBalance {
+			effectiveBalance := helpers.EffectiveBalance(state, index)
+			minPenaltyQuotient := params.BeaconConfig().MinPenaltyQuotient
+			if totalPenalties*3 < totalBalance {
 				if effectiveBalance*totalPenalties*3/totalBalance > effectiveBalance/minPenaltyQuotient {
 					penalty = effectiveBalance * totalPenalties * 3 / totalBalance
 				} else {
