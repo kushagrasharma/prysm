@@ -15,7 +15,6 @@ import (
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/validators"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	b "github.com/prysmaticlabs/prysm/shared/bytesutil"
-	"github.com/prysmaticlabs/prysm/shared/params"
 	"go.opencensus.io/trace"
 )
 
@@ -86,7 +85,6 @@ func PrevAttestations(ctx context.Context, state *pb.BeaconState) []*pb.PendingA
 
 	var prevEpochAttestations []*pb.PendingAttestation
 	prevEpoch := helpers.PrevEpoch(state)
-	log.Infof("Fetching prev boundary attestations, prev epoch: %d", helpers.PrevEpoch(state)-params.BeaconConfig().GenesisEpoch)
 
 	for _, attestation := range state.LatestAttestations {
 		if prevEpoch == helpers.SlotToEpoch(attestation.Data.Slot) {
@@ -95,33 +93,6 @@ func PrevAttestations(ctx context.Context, state *pb.BeaconState) []*pb.PendingA
 	}
 
 	return prevEpochAttestations
-}
-
-// PrevJustifiedAttestations returns the justified attestations
-// of the previous 2 epochs.
-//
-// Spec pseudocode definition:
-//   return [a for a in current_epoch_attestations + previous_epoch_attestations
-//   if a.data.justified_epoch  == state.previous_justified_epoch]
-func PrevJustifiedAttestations(
-	ctx context.Context,
-	state *pb.BeaconState,
-	currentEpochAttestations []*pb.PendingAttestation,
-	prevEpochAttestations []*pb.PendingAttestation,
-) []*pb.PendingAttestation {
-
-	ctx, span := trace.StartSpan(ctx, "beacon-chain.ChainService.state.ProcessEpoch.PrevJustifiedAttestations")
-	defer span.End()
-
-	var prevJustifiedAttestations []*pb.PendingAttestation
-	epochAttestations := append(currentEpochAttestations, prevEpochAttestations...)
-
-	for _, attestation := range epochAttestations {
-		if attestation.Data.JustifiedEpoch == state.PreviousJustifiedEpoch {
-			prevJustifiedAttestations = append(prevJustifiedAttestations, attestation)
-		}
-	}
-	return prevJustifiedAttestations
 }
 
 // PrevEpochBoundaryAttestations returns the boundary attestations

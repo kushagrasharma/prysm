@@ -212,39 +212,6 @@ func TestPrevEpochAttestations_AccurateAttestationSlots(t *testing.T) {
 	}
 }
 
-func TestPrevJustifiedAttestations_AccurateShardsAndEpoch(t *testing.T) {
-	prevEpochAttestations := []*pb.PendingAttestation{
-		{Data: &pb.AttestationData{JustifiedEpoch: 0}},
-		{Data: &pb.AttestationData{JustifiedEpoch: 0}},
-		{Data: &pb.AttestationData{JustifiedEpoch: 0}},
-		{Data: &pb.AttestationData{Shard: 2, JustifiedEpoch: 1}},
-		{Data: &pb.AttestationData{Shard: 3, JustifiedEpoch: 1}},
-		{Data: &pb.AttestationData{JustifiedEpoch: 15}},
-	}
-
-	thisEpochAttestations := []*pb.PendingAttestation{
-		{Data: &pb.AttestationData{JustifiedEpoch: 0}},
-		{Data: &pb.AttestationData{JustifiedEpoch: 0}},
-		{Data: &pb.AttestationData{JustifiedEpoch: 0}},
-		{Data: &pb.AttestationData{JustifiedEpoch: 1}},
-		{Data: &pb.AttestationData{Shard: 1, JustifiedEpoch: 1}},
-		{Data: &pb.AttestationData{JustifiedEpoch: 13}},
-	}
-
-	state := &pb.BeaconState{PreviousJustifiedEpoch: 1}
-
-	prevJustifiedAttestations := PrevJustifiedAttestations(context.Background(), state, thisEpochAttestations, prevEpochAttestations)
-
-	for i, attestation := range prevJustifiedAttestations {
-		if attestation.Data.Shard != uint64(i) {
-			t.Errorf("Wanted shard %d, got %d", i, attestation.Data.Shard)
-		}
-		if attestation.Data.JustifiedEpoch != 1 {
-			t.Errorf("Wanted justified epoch 0, got %d", attestation.Data.JustifiedEpoch)
-		}
-	}
-}
-
 func TestPrevEpochBoundaryAttestations_AccurateAttestationData(t *testing.T) {
 	if params.BeaconConfig().SlotsPerEpoch != 64 {
 		t.Errorf("SlotsPerEpoch should be 64 for these tests to pass")
@@ -419,9 +386,9 @@ func TestAttestingValidators_MatchActive(t *testing.T) {
 		t.Fatalf("Could not execute AttestingValidators: %v", err)
 	}
 
-	// Verify the winner root is attested by validator 109 97 based on shuffling.
-	if !reflect.DeepEqual(attestedValidators, []uint64{109, 97}) {
-		t.Errorf("Active validators don't match. Wanted:[109,97], Got: %v", attestedValidators)
+	// Verify the winner root is attested by validators based on shuffling.
+	if !reflect.DeepEqual(attestedValidators, []uint64{123, 65}) {
+		t.Errorf("Active validators don't match. Wanted:[123,65], Got: %v", attestedValidators)
 	}
 }
 
@@ -525,7 +492,7 @@ func TestInclusionSlot_GetsCorrectSlot(t *testing.T) {
 			AggregationBitfield: participationBitfield,
 			InclusionSlot:       102},
 	}
-	slot, err := InclusionSlot(state, 237)
+	slot, err := InclusionSlot(state, 251)
 	if err != nil {
 		t.Fatalf("Could not execute InclusionSlot: %v", err)
 	}
@@ -572,7 +539,7 @@ func TestInclusionDistance_CorrectDistance(t *testing.T) {
 			AggregationBitfield: participationBitfield,
 			InclusionSlot:       params.BeaconConfig().GenesisSlot + 100},
 	}
-	distance, err := InclusionDistance(state, 237)
+	distance, err := InclusionDistance(state, 251)
 	if err != nil {
 		t.Fatalf("Could not execute InclusionDistance: %v", err)
 	}

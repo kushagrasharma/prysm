@@ -15,6 +15,7 @@ import (
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/state/stateutils"
 	v "github.com/prysmaticlabs/prysm/beacon-chain/core/validators"
+	"github.com/prysmaticlabs/prysm/beacon-chain/db"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	"github.com/prysmaticlabs/prysm/shared/bls"
 	"github.com/prysmaticlabs/prysm/shared/forkutil"
@@ -85,7 +86,13 @@ func ProcessEth1DataInBlock(ctx context.Context, beaconState *pb.BeaconState, bl
 //     signature=block.randao_reveal, domain=get_domain(state.fork, get_current_epoch(state), DOMAIN_RANDAO)).
 //   Set state.latest_randao_mixes[get_current_epoch(state) % LATEST_RANDAO_MIXES_LENGTH] =
 //     xor(get_randao_mix(state, get_current_epoch(state)), hash(block.randao_reveal))
-func ProcessBlockRandao(ctx context.Context, beaconState *pb.BeaconState, block *pb.BeaconBlock, verifySignatures bool) (*pb.BeaconState, error) {
+func ProcessBlockRandao(
+	ctx context.Context,
+	beaconState *pb.BeaconState,
+	block *pb.BeaconBlock,
+	verifySignatures bool,
+	enableLogging bool,
+) (*pb.BeaconState, error) {
 	ctx, span := trace.StartSpan(ctx, "beacon-chain.ChainService.state.ProcessBlock.ProcessBlockRandao")
 	defer span.End()
 
@@ -93,10 +100,8 @@ func ProcessBlockRandao(ctx context.Context, beaconState *pb.BeaconState, block 
 	if err != nil {
 		return nil, fmt.Errorf("could not get beacon proposer index: %v", err)
 	}
-	log.WithField("proposerIndex", proposerIdx).Info("RANDAO expected proposer")
-	proposer := beaconState.ValidatorRegistry[proposerIdx]
 	if verifySignatures {
-		if err := verifyBlockRandao(beaconState, block, proposer); err != nil {
+		if err := verifyBlockRandao(beaconState, block, proposerIdx, enableLogging); err != nil {
 			return nil, fmt.Errorf("could not verify block randao: %v", err)
 		}
 	}
@@ -115,7 +120,8 @@ func ProcessBlockRandao(ctx context.Context, beaconState *pb.BeaconState, block 
 
 // Verify that bls_verify(pubkey=proposer.pubkey, message_hash=hash_tree_root(get_current_epoch(state)),
 //   signature=block.randao_reveal, domain=get_domain(state.fork, get_current_epoch(state), DOMAIN_RANDAO))
-func verifyBlockRandao(beaconState *pb.BeaconState, block *pb.BeaconBlock, proposer *pb.Validator) error {
+func verifyBlockRandao(beaconState *pb.BeaconState, block *pb.BeaconBlock, proposerIdx uint64, enableLogging bool) error {
+	proposer := beaconState.ValidatorRegistry[proposerIdx]
 	pub, err := bls.PublicKeyFromBytes(proposer.Pubkey)
 	if err != nil {
 		return fmt.Errorf("could not deserialize proposer public key: %v", err)
@@ -128,11 +134,12 @@ func verifyBlockRandao(beaconState *pb.BeaconState, block *pb.BeaconBlock, propo
 	if err != nil {
 		return fmt.Errorf("could not deserialize block randao reveal: %v", err)
 	}
-	log.WithFields(logrus.Fields{
-		"epoch":    helpers.CurrentEpoch(beaconState) - params.BeaconConfig().GenesisEpoch,
-		"pubkey":   fmt.Sprintf("%#x", proposer.Pubkey),
-		"epochSig": fmt.Sprintf("%#x", sig.Marshal()),
-	}).Info("Verifying randao")
+	if enableLogging {
+		log.WithFields(logrus.Fields{
+			"epoch":         helpers.CurrentEpoch(beaconState) - params.BeaconConfig().GenesisEpoch,
+			"proposerIndex": proposerIdx,
+		}).Info("Verifying randao")
+	}
 	if !sig.Verify(buf, pub, domain) {
 		return fmt.Errorf("block randao reveal signature did not verify")
 	}
@@ -411,6 +418,7 @@ func ProcessBlockAttestations(
 	beaconState *pb.BeaconState,
 	block *pb.BeaconBlock,
 	verifySignatures bool,
+	beaconDB *db.BeaconDB,
 ) (*pb.BeaconState, error) {
 	ctx, span := trace.StartSpan(ctx, "beacon-chain.ChainService.state.ProcessBlock.ProcessBlockAttestations")
 	defer span.End()
@@ -425,7 +433,7 @@ func ProcessBlockAttestations(
 	}
 
 	for idx, attestation := range atts {
-		if err := verifyAttestation(beaconState, attestation, verifySignatures); err != nil {
+		if err := verifyAttestation(ctx, beaconState, attestation, verifySignatures, beaconDB); err != nil {
 			return nil, fmt.Errorf("could not verify attestation at index %d in block: %v", idx, err)
 		}
 		beaconState.LatestAttestations = append(beaconState.LatestAttestations, &pb.PendingAttestation{
@@ -439,7 +447,7 @@ func ProcessBlockAttestations(
 	return beaconState, nil
 }
 
-func verifyAttestation(beaconState *pb.BeaconState, att *pb.Attestation, verifySignatures bool) error {
+func verifyAttestation(ctx context.Context, beaconState *pb.BeaconState, att *pb.Attestation, verifySignatures bool, beaconDB *db.BeaconDB) error {
 	if att.Data.Slot < params.BeaconConfig().GenesisSlot {
 		return fmt.Errorf(
 			"attestation slot (slot %d) less than genesis slot (%d)",
@@ -487,13 +495,22 @@ func verifyAttestation(beaconState *pb.BeaconState, att *pb.Attestation, verifyS
 
 	// Verify that attestation.data.justified_block_root is equal to
 	// get_block_root(state, get_epoch_start_slot(attestation.data.justified_epoch)).
-	blockRoot, err := BlockRoot(beaconState, helpers.StartSlot(att.Data.JustifiedEpoch))
+	justifiedSlot := helpers.StartSlot(att.Data.JustifiedEpoch)
+	var justifiedBlock *pb.BeaconBlock
+	var err error
+	for i := uint64(0); justifiedBlock == nil && i < params.BeaconConfig().SlotsPerEpoch; i++ {
+		justifiedBlock, err = beaconDB.BlockBySlot(ctx, justifiedSlot-i)
+		if err != nil {
+			return fmt.Errorf("could not get justified block: %v", err)
+		}
+	}
+	blockRoot, err := hashutil.HashBeaconBlock(justifiedBlock)
 	if err != nil {
-		return fmt.Errorf("could not get block root for justified epoch: %v", err)
+		return fmt.Errorf("could not get justified block: %v", err)
 	}
 
 	justifiedBlockRoot := att.Data.JustifiedBlockRootHash32
-	if !bytes.Equal(justifiedBlockRoot, blockRoot) {
+	if !bytes.Equal(justifiedBlockRoot, blockRoot[:]) {
 		return fmt.Errorf(
 			"expected JustifiedBlockRoot == getBlockRoot(state, JustifiedEpoch): got %#x = %#x",
 			justifiedBlockRoot,

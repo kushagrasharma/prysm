@@ -1,10 +1,13 @@
 package db
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
 	"github.com/prysmaticlabs/prysm/shared/hashutil"
+	"github.com/prysmaticlabs/prysm/shared/params"
+	"go.opencensus.io/trace"
 
 	"github.com/boltdb/bolt"
 	"github.com/gogo/protobuf/proto"
@@ -65,10 +68,18 @@ func (db *BeaconDB) SaveBlock(block *pb.BeaconBlock) error {
 	if err != nil {
 		return fmt.Errorf("failed to encode block: %v", err)
 	}
+	slotBinary := encodeSlotNumber(block.Slot)
+
+	if block.Slot > db.highestBlockSlot {
+		db.highestBlockSlot = block.Slot
+	}
 
 	return db.update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(blockBucket)
-
+		mainChain := tx.Bucket(mainChainBucket)
+		if err := mainChain.Put(slotBinary, root[:]); err != nil {
+			return fmt.Errorf("failed to include the block in the main chain bucket: %v", err)
+		}
 		return bucket.Put(root[:], enc)
 	})
 }
@@ -164,24 +175,23 @@ func (db *BeaconDB) ChainHead() (*pb.BeaconBlock, error) {
 
 // UpdateChainHead atomically updates the head of the chain as well as the corresponding state changes
 // Including a new state is optional.
-func (db *BeaconDB) UpdateChainHead(block *pb.BeaconBlock, beaconState *pb.BeaconState) error {
+func (db *BeaconDB) UpdateChainHead(ctx context.Context, block *pb.BeaconBlock, beaconState *pb.BeaconState) error {
+	ctx, span := trace.StartSpan(ctx, "beacon-chain.db.UpdateChainHead")
+	defer span.End()
+
 	blockRoot, err := hashutil.HashBeaconBlock(block)
 	if err != nil {
 		return fmt.Errorf("unable to tree hash block: %v", err)
 	}
 
-	beaconStateEnc, err := proto.Marshal(beaconState)
-	if err != nil {
-		return fmt.Errorf("unable to encode beacon state: %v", err)
-	}
-
-	currentState, ok := proto.Clone(beaconState).(*pb.BeaconState)
-	if !ok {
-		return errors.New("could not clone beacon state")
-	}
-	db.currentState = currentState
-
 	slotBinary := encodeSlotNumber(block.Slot)
+	if block.Slot > db.highestBlockSlot {
+		db.highestBlockSlot = block.Slot
+	}
+
+	if err := db.SaveState(ctx, beaconState); err != nil {
+		return fmt.Errorf("failed to save beacon state as canonical: %v", err)
+	}
 
 	return db.update(func(tx *bolt.Tx) error {
 		blockBucket := tx.Bucket(blockBucket)
@@ -200,16 +210,17 @@ func (db *BeaconDB) UpdateChainHead(block *pb.BeaconBlock, beaconState *pb.Beaco
 			return fmt.Errorf("failed to record the block as the head of the main chain: %v", err)
 		}
 
-		if err := chainInfo.Put(stateLookupKey, beaconStateEnc); err != nil {
-			return fmt.Errorf("failed to save beacon state as canonical: %v", err)
-		}
 		return nil
 	})
 }
 
 // BlockBySlot accepts a slot number and returns the corresponding block in the main chain.
 // Returns nil if a block was not recorded for the given slot.
-func (db *BeaconDB) BlockBySlot(slot uint64) (*pb.BeaconBlock, error) {
+func (db *BeaconDB) BlockBySlot(ctx context.Context, slot uint64) (*pb.BeaconBlock, error) {
+	_, span := trace.StartSpan(ctx, "BeaconDB.BlockBySlot")
+	defer span.End()
+	span.AddAttributes(trace.Int64Attribute("slot", int64(slot-params.BeaconConfig().GenesisSlot)))
+
 	var block *pb.BeaconBlock
 	slotEnc := encodeSlotNumber(slot)
 
@@ -235,30 +246,8 @@ func (db *BeaconDB) BlockBySlot(slot uint64) (*pb.BeaconBlock, error) {
 	return block, err
 }
 
-// HasBlockBySlot returns a boolean, and if the block exists, it returns the block.
-func (db *BeaconDB) HasBlockBySlot(slot uint64) (bool, *pb.BeaconBlock, error) {
-	var block *pb.BeaconBlock
-	var exists bool
-	slotEnc := encodeSlotNumber(slot)
-
-	err := db.view(func(tx *bolt.Tx) error {
-		mainChain := tx.Bucket(mainChainBucket)
-		blockBkt := tx.Bucket(blockBucket)
-
-		blockRoot := mainChain.Get(slotEnc)
-		if blockRoot == nil {
-			return nil
-		}
-
-		enc := blockBkt.Get(blockRoot)
-		if enc == nil {
-			return nil
-		}
-		exists = true
-
-		var err error
-		block, err = createBlock(enc)
-		return err
-	})
-	return exists, block, err
+// HighestBlockSlot returns the in-memory value for the highest block we've
+// seen in the database.
+func (db *BeaconDB) HighestBlockSlot() uint64 {
+	return db.highestBlockSlot
 }

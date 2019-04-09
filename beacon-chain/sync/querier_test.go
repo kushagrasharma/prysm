@@ -3,13 +3,16 @@ package sync
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/prysmaticlabs/prysm/beacon-chain/internal"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	"github.com/prysmaticlabs/prysm/shared/event"
 	"github.com/prysmaticlabs/prysm/shared/p2p"
+	"github.com/prysmaticlabs/prysm/shared/params"
 	"github.com/prysmaticlabs/prysm/shared/testutil"
 	logTest "github.com/sirupsen/logrus/hooks/test"
 )
@@ -22,6 +25,10 @@ func (mp *genesisPowChain) HasChainStartLogOccurred() (bool, uint64, error) {
 	return false, 0, nil
 }
 
+func (mp *genesisPowChain) BlockExists(ctx context.Context, hash common.Hash) (bool, *big.Int, error) {
+	return true, big.NewInt(0), nil
+}
+
 func (mp *genesisPowChain) ChainStartFeed() *event.Feed {
 	return mp.feed
 }
@@ -32,6 +39,10 @@ type afterGenesisPowChain struct {
 
 func (mp *afterGenesisPowChain) HasChainStartLogOccurred() (bool, uint64, error) {
 	return true, 0, nil
+}
+
+func (mp *afterGenesisPowChain) BlockExists(ctx context.Context, hash common.Hash) (bool, *big.Int, error) {
+	return true, big.NewInt(0), nil
 }
 
 func (mp *afterGenesisPowChain) ChainStartFeed() *event.Feed {
@@ -129,20 +140,14 @@ func TestQuerier_ChainReqResponse(t *testing.T) {
 	sq := NewQuerierService(context.Background(), cfg)
 
 	exitRoutine := make(chan bool)
-
-	defer func() {
-		close(exitRoutine)
-	}()
-
 	go func() {
 		sq.run()
 		exitRoutine <- true
 	}()
 
 	response := &pb.ChainHeadResponse{
-		Slot:                      0,
-		Hash:                      []byte{'a', 'b'},
-		FinalizedStateRootHash32S: []byte{'c', 'd'},
+		CanonicalSlot:            0,
+		CanonicalStateRootHash32: []byte{'a', 'b'},
 	}
 
 	msg := p2p.Message{
@@ -151,12 +156,13 @@ func TestQuerier_ChainReqResponse(t *testing.T) {
 
 	sq.responseBuf <- msg
 
-	expMsg := fmt.Sprintf("Latest chain head is at slot: %d and hash %#x", response.Slot, response.Hash)
+	expMsg := fmt.Sprintf(
+		"Latest chain head is at slot: %d and state root: %#x",
+		response.CanonicalSlot-params.BeaconConfig().GenesisSlot, response.CanonicalStateRootHash32,
+	)
 
-	testutil.WaitForLog(t, hook, expMsg)
-
-	sq.cancel()
 	<-exitRoutine
-
+	testutil.AssertLogsContain(t, hook, expMsg)
+	close(exitRoutine)
 	hook.Reset()
 }

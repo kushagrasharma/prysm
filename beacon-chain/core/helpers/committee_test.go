@@ -8,6 +8,8 @@ import (
 
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	"github.com/prysmaticlabs/prysm/shared/params"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 var size = 1<<(params.BeaconConfig().RandBytes*8) - 1
@@ -320,21 +322,21 @@ func TestAttestationParticipants_OK(t *testing.T) {
 			stateSlot:       params.BeaconConfig().GenesisSlot + 5,
 			shard:           2,
 			bitfield:        []byte{0xC0},
-			wanted:          []uint64{11, 121},
+			wanted:          []uint64{11, 14},
 		},
 		{
 			attestationSlot: params.BeaconConfig().GenesisSlot + 1,
 			stateSlot:       params.BeaconConfig().GenesisSlot + 10,
 			shard:           1,
 			bitfield:        []byte{0x80},
-			wanted:          []uint64{4},
+			wanted:          []uint64{5},
 		},
 		{
 			attestationSlot: params.BeaconConfig().GenesisSlot + 10,
 			stateSlot:       params.BeaconConfig().GenesisSlot + 10,
 			shard:           10,
 			bitfield:        []byte{0xC0},
-			wanted:          []uint64{14, 30},
+			wanted:          []uint64{55, 105},
 		},
 	}
 
@@ -438,29 +440,29 @@ func TestCommitteeAssignment_CanRetrieve(t *testing.T) {
 	}{
 		{
 			index:      0,
-			slot:       params.BeaconConfig().GenesisSlot + 146,
-			committee:  []uint64{105, 0},
-			shard:      18,
-			isProposer: false,
-		},
-		{
-			index:      105,
-			slot:       params.BeaconConfig().GenesisSlot + 146,
-			committee:  []uint64{105, 0},
-			shard:      18,
+			slot:       params.BeaconConfig().GenesisSlot + 160,
+			committee:  []uint64{0, 50},
+			shard:      32,
 			isProposer: true,
 		},
 		{
-			index:      64,
-			slot:       params.BeaconConfig().GenesisSlot + 139,
-			committee:  []uint64{64, 52},
-			shard:      11,
+			index:      105,
+			slot:       params.BeaconConfig().GenesisSlot + 130,
+			committee:  []uint64{11, 105},
+			shard:      2,
 			isProposer: false,
+		},
+		{
+			index:      64,
+			slot:       params.BeaconConfig().GenesisSlot + 161,
+			committee:  []uint64{110, 64},
+			shard:      33,
+			isProposer: true,
 		},
 		{
 			index:      11,
 			slot:       params.BeaconConfig().GenesisSlot + 130,
-			committee:  []uint64{11, 121},
+			committee:  []uint64{11, 105},
 			shard:      2,
 			isProposer: true,
 		},
@@ -473,20 +475,20 @@ func TestCommitteeAssignment_CanRetrieve(t *testing.T) {
 			t.Fatalf("failed to execute NextEpochCommitteeAssignment: %v", err)
 		}
 		if shard != tt.shard {
-			t.Errorf("wanted shard %d, got shard %d",
-				tt.shard, shard)
+			t.Errorf("wanted shard %d, got shard %d for validator index %d",
+				tt.shard, shard, tt.index)
 		}
 		if slot != tt.slot {
-			t.Errorf("wanted slot %d, got slot %d",
-				tt.slot, slot)
+			t.Errorf("wanted slot %d, got slot %d for validator index %d",
+				tt.slot, slot, tt.index)
 		}
 		if isProposer != tt.isProposer {
-			t.Errorf("wanted isProposer %v, got isProposer %v",
-				tt.isProposer, isProposer)
+			t.Errorf("wanted isProposer %v, got isProposer %v for validator index %d",
+				tt.isProposer, isProposer, tt.index)
 		}
 		if !reflect.DeepEqual(committee, tt.committee) {
-			t.Errorf("wanted committee %v, got committee %v",
-				tt.committee, committee)
+			t.Errorf("wanted committee %v, got committee %v for validator index %d",
+				tt.committee, committee, tt.index)
 		}
 	}
 }
@@ -496,11 +498,12 @@ func TestCommitteeAssignment_CantFindValidator(t *testing.T) {
 		Slot: params.BeaconConfig().GenesisSlot + params.BeaconConfig().SlotsPerEpoch,
 	}
 	index := uint64(10000)
-	want := fmt.Sprintf(
-		"could not get assignment validator %d",
-		index,
-	)
-	if _, _, _, _, err := CommitteeAssignment(state, state.Slot, index, false); !strings.Contains(err.Error(), want) {
-		t.Errorf("Expected %s, received %v", want, err)
+	_, _, _, _, err := CommitteeAssignment(state, state.Slot, index, false)
+	statusErr, ok := status.FromError(err)
+	if !ok {
+		t.Fatal(err)
+	}
+	if statusErr.Code() != codes.NotFound {
+		t.Errorf("Unexpected error: %v", err)
 	}
 }

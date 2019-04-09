@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	"github.com/prysmaticlabs/prysm/shared/event"
 	"github.com/prysmaticlabs/prysm/shared/params"
@@ -39,6 +40,10 @@ func (ms *mockOperationService) IncomingAttFeed() *event.Feed {
 
 func (ms *mockOperationService) IncomingExitFeed() *event.Feed {
 	return new(event.Feed)
+}
+
+func (ms *mockOperationService) HandleAttestations(_ context.Context, _ proto.Message) error {
+	return nil
 }
 
 func (ms *mockOperationService) PendingAttestations() ([]*pb.Attestation, error) {
@@ -90,6 +95,10 @@ func (m *mockChainService) CanonicalBlockFeed() *event.Feed {
 	return new(event.Feed)
 }
 
+func (m mockChainService) SaveHistoricalState(beaconState *pb.BeaconState) error {
+	return nil
+}
+
 func newMockChainService() *mockChainService {
 	return &mockChainService{
 		blockFeed:            new(event.Feed),
@@ -131,8 +140,8 @@ func TestRPC_BadEndpoint(t *testing.T) {
 		Port: "ralph merkle!!!",
 	})
 
-	if _, ok := log.(*TestLogger).testMap["error"]; ok {
-		t.Fatal("Error in Start() occurred before expected")
+	if val, ok := log.(*TestLogger).testMap["error"]; ok {
+		t.Fatalf("Error in Start() occurred before expected: %v", val)
 	}
 
 	rpcService.Start()

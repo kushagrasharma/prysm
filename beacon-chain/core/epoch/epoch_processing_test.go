@@ -12,9 +12,16 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
+	"github.com/prysmaticlabs/prysm/shared/featureconfig"
 	"github.com/prysmaticlabs/prysm/shared/hashutil"
 	"github.com/prysmaticlabs/prysm/shared/params"
 )
+
+func init() {
+	featureconfig.InitFeatureConfig(&featureconfig.FeatureFlagConfig{
+		EnableCrosslinks: true,
+	})
+}
 
 func TestCanProcessEpoch_TrueOnEpochs(t *testing.T) {
 	if params.BeaconConfig().SlotsPerEpoch != 64 {
@@ -215,7 +222,14 @@ func TestProcessJustification_PreviousEpochJustified(t *testing.T) {
 		JustifiedEpoch:        3,
 		JustificationBitfield: 4,
 	}
-	newState := ProcessJustification(context.Background(), state, 1, 1, 1, 1)
+	newState := ProcessJustification(
+		context.Background(),
+		state,
+		1,
+		1,
+		1,
+		1,
+	)
 
 	if newState.PreviousJustifiedEpoch != 3 {
 		t.Errorf("New state's prev justified slot %d != old state's justified slot %d",
@@ -234,7 +248,14 @@ func TestProcessJustification_PreviousEpochJustified(t *testing.T) {
 
 	// Assume for the case where only prev epoch got justified. Verify
 	// justified_epoch = slot_to_epoch(state.slot) -2.
-	newState = ProcessJustification(context.Background(), state, 0, 1, 1, 1)
+	newState = ProcessJustification(
+		context.Background(),
+		state,
+		0,
+		1,
+		1,
+		1,
+	)
 	if newState.JustifiedEpoch != helpers.CurrentEpoch(state)-1 {
 		t.Errorf("New state's justified epoch %d != state's epoch -2: %d",
 			newState.JustifiedEpoch, helpers.CurrentEpoch(state)-1)
@@ -319,7 +340,7 @@ func TestProcessEjections_EjectsAtCorrectSlot(t *testing.T) {
 			{ExitEpoch: params.BeaconConfig().FarFutureEpoch}},
 	}
 
-	state, err := ProcessEjections(context.Background(), state)
+	state, err := ProcessEjections(context.Background(), state, false /* disable logging */)
 	if err != nil {
 		t.Fatalf("Could not execute ProcessEjections: %v", err)
 	}
